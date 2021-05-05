@@ -1,0 +1,136 @@
+---
+title: "Final Project - Data Visualization"
+subtitle: "Diabites Prediction Study"
+author: "Andrea Gonzalez"
+
+---
+
+#Load and Install Packages
+```{r}
+install.packages("tidyverse")
+install.packages("caret")
+install.packages("h2o")
+install.packages("randomForest")
+install.packages("neuralnet")
+install.packages("e1071")
+install.packages("caTools")
+install.packages("ggpubr")
+```
+
+```{r}
+library(h2o)
+library(randomForest)
+require(caTools)
+require(neuralnet)
+library("e1071")
+library(tidyverse)
+library(caTools)
+Sys.setenv(JAVA_HOME= "/Library/Java/JavaVirtualMachines/jdk1.8.0_291.jdk/Contents/Home") #make h2o work - java update
+h2o.init()
+```
+
+#Load and select the data
+```{r}
+diabetes = read.csv("~/Downloads/diabetes.csv", header = TRUE)
+summary(diabetes)
+```
+
+#Prepare Data
+```{r}
+sample = sample.split(diabetes, SplitRatio = .75)
+
+#Generate the Samples to train and test.
+train = subset(diabetes, sample == TRUE)
+test  = subset(diabetes, sample == FALSE)
+testWithoutResponse = subset(test, select =-c(Outcome))
+testResponse = test[,9]
+```
+
+
+#Random Forest
+```{r}
+#Generate Random Forest
+modelRandomForest <- randomForest(Outcome ~ ., data=train)
+
+#Used the Random Forest to predict 
+predictionRandomForest = predict(modelRandomForest, newdata=testWithoutResponse)
+
+#Do the Confusion Matrix
+predrfOutcome = ifelse(predictionRandomForest > 0.5,1,0)
+caret::confusionMatrix(factor(testResponse) , factor(predrfOutcome))
+```
+
+>having less than 5 values
+
+#Neural Network
+```{r }
+nn=neuralnet(Outcome ~ . , 
+             data = train, 
+             hidden=4, 
+             linear.output = TRUE, 
+             rep = 4,
+             threshold = 0.5)
+#,act.fct = "logistic", linear.output = FALSE)
+plot(nn)
+prednn = neuralnet::compute(nn,testWithoutResponse)
+prob <- prednn$net.result
+prnn <- ifelse(prob<0.5, 1, 0)
+caret::confusionMatrix(factor(prnn) , factor(testResponse))
+```
+
+# H2O 
+```{r}
+df = h2o.importFile(path = 'diabetes.csv')
+df["Outcome"] <- as.factor(df["Outcome"])
+splits <- h2o.splitFrame(df, c(0.7,0.15), seed=1245)
+th20  <- h2o.assign(splits[[1]], "train.hex") # 70%
+vh20  <- h2o.assign(splits[[2]], "valid.hex") # 15%
+tsth20   <- h2o.assign(splits[[3]], "test.hex")  # 15%
+```
+
+# Deep Learning
+```{r}
+predictors <- setdiff(names(df), "Outcome")
+DL <- h2o.deeplearning(
+  model_id="dl_model_first", 
+  training_frame=th20, 
+  validation_frame=vh20,   ## validation dataset: used for scoring and early stopping
+  x=predictors,
+  y="Outcome",
+  epochs=2,
+  variable_importances=T    ## not enabled by default
+)
+pred <- h2o.predict(DL,tsth20)
+caret::confusionMatrix(factor(as.vector(pred$predict)),factor(as.vector(tsth20$Outcome)))
+```
+
+> Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+#AutoML
+```{r}
+
+autoMLModel = h2o.automl(x = predictors, y = "Outcome",
+           training_frame = th20,
+           max_models = 15,
+           seed = 123),
+           max_runtime_secs = 25
+           )
+
+# AutoML 
+lb = autoMLModel@leaderboard
+lb
+
+# prediction result on test data
+predictionAutoML = h2o.predict(autoMLModel@leader, tsth20[-9]) 
+caret::confusionMatrix(factor(as.vector(predictionAutoML$predict)),factor(as.vector(tsth20$Outcome)))
+```
+
+#SVM
+```{r}
+psvmModel= h2o.psvm(gamma = 0.01,
+                      rank_ratio = 0.1,
+                      y = "Outcome",
+                      training_frame = th20)
+predPSVM = h2o.predict(psvmModel, tsth20[-9]) 
+caret::confusionMatrix(factor(as.vector(predPSVM$predict)),factor(as.vector(tsth20$Outcome)))
+```
